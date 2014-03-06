@@ -17,7 +17,6 @@ module nitx
 
 import model_utils
 import modelize_property
-import frontend
 
 # Main class of the nit index tool
 # NitIndex build the model using the toolcontext argument
@@ -159,7 +158,7 @@ class NitIndex
 		else
 			var category = parts[0]
 			var keyword = parts[1]
-			if keyword.first == ' ' then keyword = keyword.substring_from(1)
+			if keyword.chars.first == ' ' then keyword = keyword.substring_from(1)
 			return new IndexQueryPair(str, keyword, category)
 		end
 	end
@@ -265,7 +264,7 @@ end
 # Code Analysis
 
 redef class ToolContext
-	private var nitx_phase: NitxPhase = new NitxPhase(self, [typing_phase])
+	private var nitx_phase: NitxPhase = new NitxPhase(self, [modelize_property_phase])
 end
 
 # Compiler phase for nitx
@@ -370,16 +369,16 @@ end
 redef class MModule
 	super IndexMatch
 	# prototype of the module
-	#	module ownername::name
+	#	module name
 	private fun prototype: String do return "module {name.bold}"
 
 	# namespace of the module
-	#	ownername::name
+	#	project::name
 	private fun namespace: String do
-		if public_owner == null then
+		if mgroup == null or mgroup.mproject.name == self.name then
 			return self.name
 		else
-			return "{public_owner.namespace}::{self.name}"
+			return "{mgroup.mproject}::{self.name}"
 		end
 	end
 
@@ -408,7 +407,7 @@ redef class MModule
 		# imported modules
 		var imports = new Array[MModule]
 		for mmodule in in_importation.direct_greaters.to_a do
-			if not in_nesting.direct_greaters.has(mmodule) then imports.add(mmodule)
+			imports.add(mmodule)
 		end
 		if not imports.is_empty then
 			sorter.sort(imports)
@@ -416,19 +415,6 @@ redef class MModule
 			pager.add("== imported modules".bold)
 			pager.indent = pager.indent + 1
 			for mmodule in imports do
-				pager.add("")
-				mmodule.preview(index, pager)
-			end
-			pager.indent = pager.indent - 1
-		end
-		# nested modules
-		var nested = in_nesting.direct_greaters.to_a
-		if not nested.is_empty then
-			sorter.sort(nested)
-			pager.add("")
-			pager.add("== nested modules".bold)
-			pager.indent = pager.indent + 1
-			for mmodule in nested do
 				pager.add("")
 				mmodule.preview(index, pager)
 			end
@@ -876,7 +862,7 @@ redef class String
 	private fun escape: String
 	do
 		var b = new Buffer
-		for c in self do
+		for c in self.chars do
 			if c == '\n' then
 				b.append("\\n")
 			else if c == '\0' then

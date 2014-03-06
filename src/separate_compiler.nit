@@ -18,6 +18,8 @@ module separate_compiler
 import abstract_compiler
 import layout_builders
 import rapid_type_analysis
+import collect_super_sends
+import compiler_ffi
 
 # Add separate compiler specific options
 redef class ToolContext
@@ -56,7 +58,7 @@ redef class ToolContext
 end
 
 redef class ModelBuilder
-	fun run_separate_compiler(mainmodule: MModule, runtime_type_analysis: RapidTypeAnalysis)
+	fun run_separate_compiler(mainmodule: MModule, runtime_type_analysis: nullable RapidTypeAnalysis)
 	do
 		var time0 = get_time
 		self.toolcontext.info("*** GENERATING C ***", 1)
@@ -93,6 +95,11 @@ redef class ModelBuilder
 		for t in mtypes do
 			compiler.compile_type_to_c(t)
 		end
+		# compile remaining types structures (useless but needed for the symbol resolution at link-time)
+		for t in compiler.undead_types do
+			if mtypes.has(t) then continue
+			compiler.compile_type_to_c(t)
+		end
 
 		compiler.display_stats
 
@@ -109,10 +116,9 @@ class SeparateCompiler
 	redef type VISITOR: SeparateCompilerVisitor
 
 	# The result of the RTA (used to know live types and methods)
-	var runtime_type_analysis: RapidTypeAnalysis
+	var runtime_type_analysis: nullable RapidTypeAnalysis
 
 	private var undead_types: Set[MType] = new HashSet[MType]
-	private var partial_types: Set[MType] = new HashSet[MType]
 	private var live_unresolved_types: Map[MClassDef, Set[MType]] = new HashMap[MClassDef, HashSet[MType]]
 
 	private var type_layout: nullable Layout[MType]
@@ -120,7 +126,7 @@ class SeparateCompiler
 	protected var method_layout: nullable Layout[PropertyLayoutElement]
 	protected var attr_layout: nullable Layout[MAttribute]
 
-	init(mainmodule: MModule, mmbuilder: ModelBuilder, runtime_type_analysis: RapidTypeAnalysis) do
+	init(mainmodule: MModule, mmbuilder: ModelBuilder, runtime_type_analysis: nullable RapidTypeAnalysis) do
 		super(mainmodule, mmbuilder)
 		var file = new_file("nit.common")
 		self.header = new CodeWriter(file)
@@ -270,7 +276,12 @@ class SeparateCompiler
 		end
 
 		# lookup super calls and add it to the list of mmethods to build layout with
-		var super_calls = runtime_type_analysis.live_super_sends
+		var super_calls
+		if runtime_type_analysis != null then
+			super_calls = runtime_type_analysis.live_super_sends
+		else
+			super_calls = modelbuilder.collect_super_sends
+		end
 		for mmethoddef in super_calls do
 			var mclass = mmethoddef.mclassdef.mclass
 			mmethods[mclass].add(mmethoddef)
@@ -436,15 +447,9 @@ class SeparateCompiler
 		var mtypes = new HashSet[MType]
 		mtypes.add_all(self.runtime_type_analysis.live_types)
 		mtypes.add_all(self.runtime_type_analysis.live_cast_types)
-		mtypes.add_all(self.undead_types)
 		for c in self.box_kinds.keys do
 			mtypes.add(c.mclass_type)
 		end
-
-		for mtype in mtypes do
-			retrieve_partial_types(mtype)
-		end
-		mtypes.add_all(self.partial_types)
 
 		# Typing Layout
 		var layout_builder: TypingLayoutBuilder[MType]
@@ -574,34 +579,6 @@ class SeparateCompiler
 		return tables
 	end
 
-	fun retrieve_partial_types(mtype: MType) do
-		# add formal types arguments to mtypes
-		if mtype isa MGenericType then
-			for ft in mtype.arguments do
-				if ft.need_anchor then
-					print("Why do we need anchor here ?")
-					abort
-				end
-				self.partial_types.add(ft)
-				retrieve_partial_types(ft)
-			end
-		end
-		var mclass_type: MClassType
-		if mtype isa MNullableType then
-			mclass_type = mtype.mtype.as(MClassType)
-		else
-			mclass_type = mtype.as(MClassType)
-		end
-
-		# add virtual types to mtypes
-		for vt in self.mainmodule.properties(mclass_type.mclass) do
-			if vt isa MVirtualTypeProp then
-				var anchored = vt.mvirtualtype.lookup_bound(self.mainmodule, mclass_type).anchor_to(self.mainmodule, mclass_type)
-				self.partial_types.add(anchored)
-			end
-		end
-	end
-
 	# Separately compile all the method definitions of the module
 	fun compile_module_to_c(mmodule: MModule)
 	do
@@ -623,6 +600,10 @@ class SeparateCompiler
 	# Globaly compile the type structure of a live type
 	fun compile_type_to_c(mtype: MType)
 	do
+		assert not mtype.need_anchor
+		var layout = self.type_layout
+		var is_live = mtype isa MClassType and runtime_type_analysis.live_types.has(mtype)
+		var is_cast_live = runtime_type_analysis.live_cast_types.has(mtype)
 		var c_name = mtype.c_name
 		var v = new SeparateCompilerVisitor(self)
 		v.add_decl("/* runtime type {mtype} */")
@@ -632,39 +613,70 @@ class SeparateCompiler
 
 		# const struct type_X
 		v.add_decl("const struct type type_{c_name} = \{")
-		v.add_decl("{self.type_layout.ids[mtype]},")
-		v.add_decl("\"{mtype}\", /* class_name_string */")
-		var layout = self.type_layout
-		if layout isa PHLayout[MType, MType] then
-			v.add_decl("{layout.masks[mtype]},")
+
+		# type id (for cast target)
+		if is_cast_live then
+			v.add_decl("{layout.ids[mtype]},")
 		else
-			v.add_decl("{layout.pos[mtype]},")
+			v.add_decl("-1, /*CAST DEAD*/")
 		end
+
+		# type name
+		v.add_decl("\"{mtype}\", /* class_name_string */")
+
+		# type color (for cast target)
+		if is_cast_live then
+			if layout isa PHLayout[MType, MType] then
+				v.add_decl("{layout.masks[mtype]},")
+			else
+				v.add_decl("{layout.pos[mtype]},")
+			end
+		else
+			v.add_decl("-1, /*CAST DEAD*/")
+		end
+
+		# is_nullable bit
 		if mtype isa MNullableType then
 			v.add_decl("1,")
 		else
 			v.add_decl("0,")
 		end
-		if compile_type_resolution_table(mtype) then
-			v.require_declaration("resolution_table_{c_name}")
-			v.add_decl("&resolution_table_{c_name},")
-		else
-			v.add_decl("NULL,")
-		end
-		v.add_decl("{self.type_tables[mtype].length},")
-		v.add_decl("\{")
-		for stype in self.type_tables[mtype] do
-			if stype == null then
-				v.add_decl("-1, /* empty */")
+
+		# resolution table (for receiver)
+		if is_live then
+			var mclass_type = mtype
+			if mclass_type isa MNullableType then mclass_type = mclass_type.mtype
+			assert mclass_type isa MClassType
+			if resolution_tables[mclass_type].is_empty then
+				v.add_decl("NULL, /*NO RESOLUTIONS*/")
 			else
-				v.add_decl("{self.type_layout.ids[stype]}, /* {stype} */")
+				compile_type_resolution_table(mtype)
+				v.require_declaration("resolution_table_{c_name}")
+				v.add_decl("&resolution_table_{c_name},")
 			end
+		else
+			v.add_decl("NULL, /*DEAD*/")
 		end
-		v.add_decl("\},")
+
+		# cast table (for receiver)
+		if is_live then
+			v.add_decl("{self.type_tables[mtype].length},")
+			v.add_decl("\{")
+			for stype in self.type_tables[mtype] do
+				if stype == null then
+					v.add_decl("-1, /* empty */")
+				else
+					v.add_decl("{layout.ids[stype]}, /* {stype} */")
+				end
+			end
+			v.add_decl("\},")
+		else
+			v.add_decl("0, \{\}, /*DEAD TYPE*/")
+		end
 		v.add_decl("\};")
 	end
 
-	fun compile_type_resolution_table(mtype: MType): Bool do
+	fun compile_type_resolution_table(mtype: MType) do
 
 		var mclass_type: MClassType
 		if mtype isa MNullableType then
@@ -672,7 +684,6 @@ class SeparateCompiler
 		else
 			mclass_type = mtype.as(MClassType)
 		end
-		if not self.resolution_tables.has_key(mclass_type) then return false
 
 		var layout = self.resolution_layout
 
@@ -707,7 +718,6 @@ class SeparateCompiler
 		end
 		v.add_decl("\}")
 		v.add_decl("\};")
-		return true
 	end
 
 	# Globally compile the table of the class mclass
@@ -722,7 +732,7 @@ class SeparateCompiler
 		var attrs = self.attr_tables[mclass]
 		var v = new_visitor
 
-		var is_dead = not runtime_type_analysis.live_classes.has(mclass) and mtype.ctype == "val*" and mclass.name != "NativeArray"
+		var is_dead = runtime_type_analysis != null and not runtime_type_analysis.live_classes.has(mclass) and mtype.ctype == "val*" and mclass.name != "NativeArray"
 
 		v.add_decl("/* runtime class {c_name} */")
 
@@ -814,8 +824,6 @@ class SeparateCompiler
 			v.add("return {res};")
 		end
 		v.add("\}")
-
-		generate_check_init_instance(mtype)
 	end
 
 	# Add a dynamic test to ensure that the type referenced by `t` is a live type
@@ -825,27 +833,9 @@ class SeparateCompiler
 		v.add("if({t} == NULL) \{")
 		v.add_abort("type null")
 		v.add("\}")
-		v.add("if({t}->resolution_table == NULL) \{")
+		v.add("if({t}->table_size == 0) \{")
 		v.add("fprintf(stderr, \"Insantiation of a dead type: %s\\n\", {t}->name);")
 		v.add_abort("type dead")
-		v.add("\}")
-	end
-
-	redef fun generate_check_init_instance(mtype)
-	do
-		if self.modelbuilder.toolcontext.opt_no_check_initialization.value then return
-
-		var v = self.new_visitor
-		var c_name = mtype.mclass.c_name
-		var res = new RuntimeVariable("self", mtype, mtype)
-		self.provide_declaration("CHECK_NEW_{c_name}", "void CHECK_NEW_{c_name}({mtype.ctype});")
-		v.add_decl("/* allocate {mtype} */")
-		v.add_decl("void CHECK_NEW_{c_name}({mtype.ctype} {res}) \{")
-		if runtime_type_analysis.live_classes.has(mtype.mclass) then
-			self.generate_check_attr(v, res, mtype)
-		else
-			v.add_abort("{mtype.mclass} is DEAD")
-		end
 		v.add("\}")
 	end
 
@@ -908,6 +898,19 @@ class SeparateCompiler
 		end
 		print "\t{total}\t{holes}"
 	end
+
+	redef fun compile_nitni_structs
+	do
+		self.header.add_decl("struct nitni_instance \{struct instance *value;\};")
+	end
+	
+	redef fun finalize_ffi_for_module(nmodule)
+	do
+		var old_module = self.mainmodule
+		self.mainmodule = nmodule.mmodule.as(not null)
+		super
+		self.mainmodule = old_module
+	end
 end
 
 # A visitor on the AST of property definition that generate the C code of a separate compilation process.
@@ -943,18 +946,20 @@ class SeparateCompilerVisitor
 		else if mtype.ctype == "val*" then
 			var valtype = value.mtype.as(MClassType)
 			var res = self.new_var(mtype)
-			if not compiler.runtime_type_analysis.live_types.has(valtype) then
+			if compiler.runtime_type_analysis != null and not compiler.runtime_type_analysis.live_types.has(valtype) then
 				self.add("/*no autobox from {value.mtype} to {mtype}: {value.mtype} is not live! */")
-				self.add("printf(\"Dead code executed!\\n\"); exit(1);")
+				self.add("printf(\"Dead code executed!\\n\"); show_backtrace(1);")
 				return res
 			end
 			self.add("{res} = BOX_{valtype.c_name}({value}); /* autobox from {value.mtype} to {mtype} */")
 			return res
+		else if value.mtype.cname_blind == "void*" and mtype.cname_blind == "void*" then
+			return value
 		else
 			# Bad things will appen!
 			var res = self.new_var(mtype)
 			self.add("/* {res} left unintialized (cannot convert {value.mtype} to {mtype}) */")
-			self.add("printf(\"Cast error: Cannot cast %s to %s.\\n\", \"{value.mtype}\", \"{mtype}\"); exit(1);")
+			self.add("printf(\"Cast error: Cannot cast %s to %s.\\n\", \"{value.mtype}\", \"{mtype}\"); show_backtrace(1);")
 			return res
 		end
 	end
@@ -974,11 +979,7 @@ class SeparateCompilerVisitor
 	redef fun send(mmethod, arguments)
 	do
 		self.varargize(mmethod.intro, mmethod.intro.msignature.as(not null), arguments)
-		return table_send(mmethod, arguments, mmethod.const_color)
-	end
 
-	private fun table_send(mmethod: MMethod, arguments: Array[RuntimeVariable], const_color: String): nullable RuntimeVariable
-	do
 		if arguments.first.mcasttype.ctype != "val*" then
 			# In order to shortcut the primitive, we need to find the most specific method
 			# Howverr, because of performance (no flattening), we always work on the realmainmodule
@@ -988,6 +989,13 @@ class SeparateCompilerVisitor
 			self.compiler.mainmodule = m
 			return res
 		end
+
+		return table_send(mmethod, arguments, mmethod.const_color)
+	end
+
+	private fun table_send(mmethod: MMethod, arguments: Array[RuntimeVariable], const_color: String): nullable RuntimeVariable
+	do
+		assert arguments.length == mmethod.intro.msignature.arity + 1 else debug("Invalid arity for {mmethod}. {arguments.length} arguments given.")
 
 		var res: nullable RuntimeVariable
 		var msignature = mmethod.intro.msignature.resolve_for(mmethod.intro.mclassdef.bound_mtype, mmethod.intro.mclassdef.bound_mtype, mmethod.intro.mclassdef.mmodule, true)
@@ -1043,7 +1051,7 @@ class SeparateCompilerVisitor
 					self.add("{res} = 1; /* {arg.inspect} cannot be null */")
 				end
 			else
-				self.add_abort("Reciever is null")
+				self.add_abort("Receiver is null")
 			end
 			self.add("\} else \{")
 		end
@@ -1084,6 +1092,8 @@ class SeparateCompilerVisitor
 
 	redef fun call(mmethoddef, recvtype, arguments)
 	do
+		assert arguments.length == mmethoddef.msignature.arity + 1 else debug("Invalid arity for {mmethoddef}. {arguments.length} arguments given.")
+
 		var res: nullable RuntimeVariable
 		var ret = mmethoddef.msignature.return_mtype
 		if mmethoddef.mproperty.is_new then
@@ -1128,6 +1138,15 @@ class SeparateCompilerVisitor
 
 	redef fun supercall(m: MMethodDef, recvtype: MClassType, arguments: Array[RuntimeVariable]): nullable RuntimeVariable
 	do
+		if arguments.first.mcasttype.ctype != "val*" then
+			# In order to shortcut the primitive, we need to find the most specific method
+			# However, because of performance (no flattening), we always work on the realmainmodule
+			var main = self.compiler.mainmodule
+			self.compiler.mainmodule = self.compiler.realmainmodule
+			var res = self.monomorphic_super_send(m, recvtype, arguments)
+			self.compiler.mainmodule = main
+			return res
+		end
 		return table_send(m.mproperty, arguments, m.const_color)
 	end
 
@@ -1256,11 +1275,37 @@ class SeparateCompilerVisitor
 		end
 	end
 
+	# Check that mtype is a live open type
+	fun hardening_live_open_type(mtype: MType)
+	do
+		if not compiler.modelbuilder.toolcontext.opt_hardening.value then return
+		self.require_declaration(mtype.const_color)
+		var col = mtype.const_color
+		self.add("if({col} == -1) \{")
+		self.add("fprintf(stderr, \"Resolution of a dead open type: %s\\n\", \"{mtype.to_s.escape_to_c}\");")
+		self.add_abort("open type dead")
+		self.add("\}")
+	end
+
+	# Check that mtype it a pointer to a live cast type
+	fun hardening_cast_type(t: String)
+	do
+		if not compiler.modelbuilder.toolcontext.opt_hardening.value then return
+		add("if({t} == NULL) \{")
+		add_abort("cast type null")
+		add("\}")
+		add("if({t}->id == -1 || {t}->color == -1) \{")
+		add("fprintf(stderr, \"Try to cast on a dead cast type: %s\\n\", {t}->name);")
+		add_abort("cast type dead")
+		add("\}")
+	end
+
 	redef fun init_instance(mtype)
 	do
 		self.require_declaration("NEW_{mtype.mclass.c_name}")
 		var compiler = self.compiler
 		if mtype isa MGenericType and mtype.need_anchor then
+			hardening_live_open_type(mtype)
 			link_unresolved_type(self.frame.mpropdef.mclassdef, mtype)
 			var recv = self.frame.arguments.first
 			var recv_type_info = self.type_info(recv)
@@ -1274,13 +1319,6 @@ class SeparateCompilerVisitor
 		compiler.undead_types.add(mtype)
 		self.require_declaration("type_{mtype.c_name}")
 		return self.new_expr("NEW_{mtype.mclass.c_name}(&type_{mtype.c_name})", mtype)
-	end
-
-	redef fun check_init_instance(value, mtype)
-	do
-		if self.compiler.modelbuilder.toolcontext.opt_no_check_initialization.value then return
-		self.require_declaration("CHECK_NEW_{mtype.mclass.c_name}")
-		self.add("CHECK_NEW_{mtype.mclass.c_name}({value});")
 	end
 
 	redef fun type_test(value, mtype, tag)
@@ -1320,17 +1358,19 @@ class SeparateCompilerVisitor
 			self.add_decl("const struct type* {type_struct};")
 
 			# Either with resolution_table with a direct resolution
-			link_unresolved_type(self.frame.mpropdef.mclassdef, ntype)
-			self.require_declaration(ntype.const_color)
+			hardening_live_open_type(mtype)
+			link_unresolved_type(self.frame.mpropdef.mclassdef, mtype)
+			self.require_declaration(mtype.const_color)
 			if compiler.modelbuilder.toolcontext.opt_phmod_typing.value or compiler.modelbuilder.toolcontext.opt_phand_typing.value then
-				self.add("{type_struct} = {recv_type_info}->resolution_table->types[HASH({recv_type_info}->resolution_table->mask, {ntype.const_color})];")
+				self.add("{type_struct} = {recv_type_info}->resolution_table->types[HASH({recv_type_info}->resolution_table->mask, {mtype.const_color})];")
 			else
-				self.add("{type_struct} = {recv_type_info}->resolution_table->types[{ntype.const_color}];")
+				self.add("{type_struct} = {recv_type_info}->resolution_table->types[{mtype.const_color}];")
 			end
 			if compiler.modelbuilder.toolcontext.opt_typing_test_metrics.value then
 				self.compiler.count_type_test_unresolved[tag] += 1
 				self.add("count_type_test_unresolved_{tag}++;")
 			end
+			hardening_cast_type(type_struct)
 			self.add("{cltype} = {type_struct}->color;")
 			self.add("{idtype} = {type_struct}->id;")
 			if maybe_null and accept_null == "0" then
@@ -1342,6 +1382,7 @@ class SeparateCompilerVisitor
 		else if ntype isa MClassType then
 			compiler.undead_types.add(mtype)
 			self.require_declaration("type_{mtype.c_name}")
+			hardening_cast_type("(&type_{mtype.c_name})")
 			self.add("{cltype} = type_{mtype.c_name}.color;")
 			self.add("{idtype} = type_{mtype.c_name}.id;")
 			if compiler.modelbuilder.toolcontext.opt_typing_test_metrics.value then
@@ -1349,7 +1390,7 @@ class SeparateCompilerVisitor
 				self.add("count_type_test_resolved_{tag}++;")
 			end
 		else
-			self.add("printf(\"NOT YET IMPLEMENTED: type_test(%s, {mtype}).\\n\", \"{value.inspect}\"); exit(1);")
+			self.add("printf(\"NOT YET IMPLEMENTED: type_test(%s, {mtype}).\\n\", \"{value.inspect}\"); show_backtrace(1);")
 		end
 
 		# check color is in table
@@ -1405,6 +1446,8 @@ class SeparateCompilerVisitor
 		self.add_decl("const char* {res};")
 		if value.mtype.ctype == "val*" then
 			self.add "{res} = {value} == NULL ? \"null\" : {value}->type->name;"
+		else if value.mtype isa MClassType and value.mtype.as(MClassType).mclass.kind == extern_kind then
+			self.add "{res} = \"{value.mtype.as(MClassType).mclass}\";"
 		else
 			self.require_declaration("type_{value.mtype.c_name}")
 			self.add "{res} = type_{value.mtype.c_name}.name;"
@@ -1531,7 +1574,6 @@ class SeparateCompilerVisitor
 			self.add("((struct instance_{nclass.c_name}*){nat})->values[{i}] = (val*) {r};")
 		end
 		self.send(self.get_property("with_native", arrayclass.intro.bound_mtype), [res, nat, length])
-		self.check_init_instance(res, arraytype)
 		self.add("\}")
 		return res
 	end
@@ -1543,6 +1585,7 @@ class SeparateCompilerVisitor
 		assert mtype isa MGenericType
 		var compiler = self.compiler
 		if mtype.need_anchor then
+			hardening_live_open_type(mtype)
 			link_unresolved_type(self.frame.mpropdef.mclassdef, mtype)
 			var recv = self.frame.arguments.first
 			var recv_type_info = self.type_info(recv)
@@ -1688,6 +1731,7 @@ class SeparateRuntimeFunction
 			v.add("return {frame.returnvar.as(not null)};")
 		end
 		v.add("\}")
+		if not self.c_name.has_substring("VIRTUAL", 0) then compiler.names[self.c_name] = "{mmethoddef.mclassdef.mmodule.name}::{mmethoddef.mclassdef.mclass.name}::{mmethoddef.mproperty.name} ({mmethoddef.location.file.filename}:{mmethoddef.location.line_start})"
 	end
 end
 
@@ -1765,6 +1809,7 @@ class VirtualRuntimeFunction
 			v.add("return {frame.returnvar.as(not null)};")
 		end
 		v.add("\}")
+		if not self.c_name.has_substring("VIRTUAL", 0) then compiler.names[self.c_name] = "{mmethoddef.mclassdef.mmodule.name}::{mmethoddef.mclassdef.mclass.name}::{mmethoddef.mproperty.name} ({mmethoddef.location.file.filename}--{mmethoddef.location.line_start})"
 	end
 
 	# TODO ?

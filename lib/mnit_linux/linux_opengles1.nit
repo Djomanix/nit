@@ -14,7 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-module linux_opengles1
+module linux_opengles1 is
+	pkgconfig("glesv1_cm", "x11", "egl")
+	c_compiler_option(exec("sdl-config", "--cflags"))
+	c_linker_option(exec("sdl-config", "--libs"), "-lSDL_image -lSDL_ttf")
+end
 
 import mnit # for
 # import opengles1
@@ -42,7 +46,7 @@ redef class Display
 	fun wanted_height: Int do return 600
 end
 
-redef class Opengles1Display # in "C" `{struct mnit_opengles_Texture *`}
+redef class Opengles1Display
 
 	# display managing the window, events, fonts? and image loading?
 	var sdl_display: SDLDisplay
@@ -92,7 +96,7 @@ redef extern Opengles1Image
 	`}
 
 	# using sdl
-	new from_file( path: String ) is extern import String::to_cstring `{
+	new from_file( path: String ) is extern import String.to_cstring `{
 		SDL_Surface *sdl_image;
 		struct mnit_opengles_Texture *opengles_image;
 

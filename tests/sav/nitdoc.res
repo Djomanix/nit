@@ -14,6 +14,7 @@ usage: nitdoc [options] file...
   -d, --dir                Directory where doc is generated
   --source                 What link for source (%f for filename, %l for first line, %L for last line)
   --sharedir               Directory containing the nitdoc files
+  --shareurl               Do not copy shared files, link JS and CSS file to share url instead
   --no-dot                 Do not generate graphes with graphviz
   --private                Generate the private API
   --custom-title           Title displayed in the top of the Overview page and as suffix of all page names
@@ -23,3 +24,5 @@ usage: nitdoc [options] file...
   --github-upstream        The branch where edited commits will be pulled into (ex: user:repo:branch)
   --github-base-sha1       The sha1 of the base commit used to create pull request
   --github-gitdir          The git working directory used to resolve path name (ex: /home/me/myproject/)
+  --piwik-tracker          The URL of the Piwik tracker (ex: nitlanguage.org/piwik/)
+  --piwik-site-id          The site ID in Piwik tracker

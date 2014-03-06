@@ -16,7 +16,12 @@ module math
 import kernel
 import collection
 
+in "C header" `{
+#include <math.h>
+`}
+
 redef class Int
+	# Returns a random `Int` in `[0 .. self[`.
 	fun rand: Int is extern "kernel_Int_Int_rand_0"
 	fun bin_and(i: Int): Int is extern "kernel_Int_Int_binand_0"
 	fun bin_or(i: Int): Int is extern "kernel_Int_Int_binor_0"
@@ -34,20 +39,41 @@ redef class Float
 	fun acos: Float is extern "kernel_Float_Float_acos_0"
 	fun asin: Float is extern "kernel_Float_Float_asin_0"
 	fun atan: Float is extern "kernel_Float_Float_atan_0"
+	fun abs: Float `{ return fabs(recv); `}
 
 	fun pow(e: Float): Float is extern "kernel_Float_Float_pow_1"
 	fun log: Float is extern "kernel_Float_Float_log_0"
 	fun exp: Float is extern "kernel_Float_Float_exp_0"
 	
+	# Returns a random `Float` in `[0.0 .. self[`.
 	fun rand: Float is extern "kernel_Float_Float_rand_0"
 	fun hypot_with( b : Float ) : Float is extern "hypotf"
+
+	fun is_nan: Bool is extern "isnan"
+
+	# Is the float an infinite value
+	# this function returns:
+	#
+	#  * 1 if self is positive infinity
+	#  * -1 if self is negative infinity
+	#  * 0 otherwise
+	fun is_inf: Int do
+		if is_inf_extern then
+			if self < 0.0 then return -1
+			return 1
+		end
+		return 0
+	end
+
+	private fun is_inf_extern: Bool is extern "isinf"
 end
 
 redef class Collection[ E ]
-	# Return a random element in the collection
-	fun rand : nullable E
+	# Return a random element form the collection
+	# There must be at least one element in the collection
+	fun rand: E
 	do
-		if is_empty then return null
+		if is_empty then abort
 		var rand_index = length.rand
 
 		for e in self do

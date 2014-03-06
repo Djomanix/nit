@@ -80,7 +80,7 @@ abstract class AbstractArrayRead[E]
 		return -1
 	end
 
-	# The index of the last occurrence of an element starting from pos.
+	# The index of the first occurrence of an element starting from pos, by decremanting the index
 	# Return -1 if not found.
 	fun last_index_of_from(item: E, pos: Int): Int
 	do
@@ -453,7 +453,7 @@ class ArrayMap[K: Object, E]
 		if i >= 0 then
 			return _items[i].second
 		else
-			abort
+			return provide_default_value(key)
 		end
 	end
 

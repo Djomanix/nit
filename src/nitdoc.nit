@@ -42,6 +42,7 @@ class NitdocContext
 	private var opt_dir = new OptionString("Directory where doc is generated", "-d", "--dir")
 	private var opt_source = new OptionString("What link for source (%f for filename, %l for first line, %L for last line)", "--source")
 	private var opt_sharedir = new OptionString("Directory containing the nitdoc files", "--sharedir")
+	private var opt_shareurl = new OptionString("Do not copy shared files, link JS and CSS file to share url instead", "--shareurl")
 	private var opt_nodot = new OptionBool("Do not generate graphes with graphviz", "--no-dot")
 	private var opt_private: OptionBool = new OptionBool("Generate the private API", "--private")
 
@@ -54,10 +55,13 @@ class NitdocContext
 	private var opt_github_base_sha1: OptionString = new OptionString("The sha1 of the base commit used to create pull request", "--github-base-sha1")
 	private var opt_github_gitdir: OptionString = new OptionString("The git working directory used to resolve path name (ex: /home/me/myproject/)", "--github-gitdir")
 
+	private var opt_piwik_tracker: OptionString = new OptionString("The URL of the Piwik tracker (ex: nitlanguage.org/piwik/)", "--piwik-tracker")
+	private var opt_piwik_site_id: OptionString = new OptionString("The site ID in Piwik tracker", "--piwik-site-id")
+
 	init do
 		toolcontext.option_context.add_option(opt_dir)
 		toolcontext.option_context.add_option(opt_source)
-		toolcontext.option_context.add_option(opt_sharedir)
+		toolcontext.option_context.add_option(opt_sharedir, opt_shareurl)
 		toolcontext.option_context.add_option(opt_nodot)
 		toolcontext.option_context.add_option(opt_private)
 		toolcontext.option_context.add_option(opt_custom_title)
@@ -67,13 +71,15 @@ class NitdocContext
 		toolcontext.option_context.add_option(opt_github_upstream)
 		toolcontext.option_context.add_option(opt_github_base_sha1)
 		toolcontext.option_context.add_option(opt_github_gitdir)
+		toolcontext.option_context.add_option(opt_piwik_tracker)
+		toolcontext.option_context.add_option(opt_piwik_site_id)
 		toolcontext.process_options
 		self.arguments = toolcontext.option_context.rest
 
 		if arguments.length < 1 then
 			print "usage: nitdoc [options] file..."
 			toolcontext.option_context.usage
-			exit(1)
+			exit(0)
 		end
 		self.process_options
 
@@ -114,17 +120,11 @@ class NitdocContext
 				print "Error: Cannot locate nitdoc share files. Uses --sharedir or envvar NIT_DIR"
 				abort
 			end
-			dir = "{share_dir.to_s}/scripts/js-facilities.js"
-			if share_dir == null then
-				print "Error: Invalid nitdoc share files. Check --sharedir or envvar NIT_DIR"
-				abort
-			end
-
-			if opt_private.value then
-				min_visibility = none_visibility
-			else
-				min_visibility = protected_visibility
-			end
+		end
+		if opt_private.value then
+			min_visibility = none_visibility
+		else
+			min_visibility = protected_visibility
 		end
 		var gh_upstream = opt_github_upstream.value
 		var gh_base_sha = opt_github_base_sha1.value
@@ -145,7 +145,11 @@ class NitdocContext
 	fun generate_nitdoc do
 		# Create destination dir if it's necessary
 		if not output_dir.file_exists then output_dir.mkdir
-		sys.system("cp -r {share_dir.to_s}/* {output_dir.to_s}/")
+		if opt_shareurl.value == null then
+			sys.system("cp -r {share_dir.to_s}/* {output_dir.to_s}/")
+		else
+			sys.system("cp -r {share_dir.to_s}/resources/ {output_dir.to_s}/resources/")
+		end
 		self.dot_dir = null
 		if not opt_nodot.value then self.dot_dir = output_dir.to_s
 		overview
@@ -156,7 +160,7 @@ class NitdocContext
 	end
 
 	private fun overview do
-		var overviewpage = new NitdocOverview(self, dot_dir)
+		var overviewpage = new NitdocOverview(self)
 		overviewpage.save("{output_dir.to_s}/index.html")
 	end
 
@@ -168,14 +172,14 @@ class NitdocContext
 	private fun modules do
 		for mmodule in model.mmodules do
 			if mmodule.name == "<main>" then continue
-			var modulepage = new NitdocModule(mmodule, self, dot_dir)
+			var modulepage = new NitdocModule(mmodule, self)
 			modulepage.save("{output_dir.to_s}/{mmodule.url}")
 		end
 	end
 
 	private fun classes do
 		for mclass in mbuilder.model.mclasses do
-			var classpage = new NitdocClass(mclass, self, dot_dir, source)
+			var classpage = new NitdocClass(mclass, self)
 			classpage.save("{output_dir.to_s}/{mclass.url}")
 		end
 	end
@@ -218,28 +222,21 @@ end
 # Nitdoc base page
 abstract class NitdocPage
 
-	var dot_dir: nullable String
-	var source: nullable String
 	var ctx: NitdocContext
+	var shareurl = "."
 
 	init(ctx: NitdocContext) do
 		self.ctx = ctx
+		if ctx.opt_shareurl.value != null then shareurl = ctx.opt_shareurl.value.as(not null)
 	end
 
 	protected fun head do
 		append("<meta charset='utf-8'/>")
-		append("<script type='text/javascript' src='scripts/jquery-1.7.1.min.js'></script>")
-		append("<script type='text/javascript' src='scripts/ZeroClipboard.min.js'></script>")
-		append("<script type='text/javascript' src='scripts/Nitdoc.UI.js'></script>")
-		append("<script type='text/javascript' src='scripts/Markdown.Converter.js'></script>")
-		append("<script type='text/javascript' src='scripts/base64.js'></script>")
-		append("<script type='text/javascript' src='scripts/Nitdoc.GitHub.js'></script>")
-		append("<script type='text/javascript' src='quicksearch-list.js'></script>")
-		append("<script type='text/javascript' src='scripts/Nitdoc.QuickSearch.js'></script>")
-		append("<link rel='stylesheet' href='styles/main.css' type='text/css' media='screen'/>")
-		append("<link rel='stylesheet' href='styles/Nitdoc.UI.css' type='text/css' media='screen'/>")
-		append("<link rel='stylesheet' href='styles/Nitdoc.QuickSearch.css' type='text/css' media='screen'/>")
-		append("<link rel='stylesheet' href='styles/Nitdoc.GitHub.css' type='text/css' media='screen'/>")
+		append("<link rel='stylesheet' href='{shareurl}/css/main.css' type='text/css'/>")
+		append("<link rel='stylesheet' href='{shareurl}/css/Nitdoc.UI.css' type='text/css''/>")
+		append("<link rel='stylesheet' href='{shareurl}/css/Nitdoc.QuickSearch.css' type='text/css'/>")
+		append("<link rel='stylesheet' href='{shareurl}/css/Nitdoc.GitHub.css' type='text/css'/>")
+		append("<link rel='stylesheet' href='{shareurl}/css/Nitdoc.ModalBox.css' type='text/css'/>")
 		var title = ""
 		if ctx.opt_custom_title.value != null then
 			title = " | {ctx.opt_custom_title.value.to_s}"
@@ -275,7 +272,7 @@ abstract class NitdocPage
 
 	# Generate a clickable graphviz image using a dot content
 	protected fun generate_dot(dot: String, name: String, alt: String) do
-		var output_dir = dot_dir
+		var output_dir = ctx.dot_dir
 		if output_dir == null then return
 		var file = new OFStream.open("{output_dir}/{name}.dot")
 		file.write(dot)
@@ -292,6 +289,7 @@ abstract class NitdocPage
 	# Add a (source) link for a given location
 	protected fun show_source(l: Location): String
 	do
+		var source = ctx.source
 		if source == null then
 			return "({l.file.filename.simplify_path})"
 		else
@@ -302,6 +300,7 @@ abstract class NitdocPage
 			source = x.join(l.line_start.to_s)
 			x = source.split_with("%L")
 			source = x.join(l.line_end.to_s)
+			source = source.simplify_path
 			return " (<a target='_blank' title='Show source' href=\"{source.to_s}\">source</a>)"
 		end
 	end
@@ -313,6 +312,7 @@ abstract class NitdocPage
 		head
 		append("</head>")
 		append("<body")
+		append(" data-bootstrap-share='{shareurl}'")
 		if ctx.opt_github_upstream.value != null and ctx.opt_github_base_sha1.value != null then
 			append(" data-github-upstream='{ctx.opt_github_upstream.value.as(not null)}'")
 			append(" data-github-base-sha1='{ctx.opt_github_base_sha1.value.as(not null)}'")
@@ -325,6 +325,27 @@ abstract class NitdocPage
 		content
 		append("</div>")
 		footer
+		append("<script data-main=\"{shareurl}/js/nitdoc\" src=\"{shareurl}/js/lib/require.js\"></script>")
+
+		# piwik tracking
+		var tracker_url = ctx.opt_piwik_tracker.value
+		var site_id = ctx.opt_piwik_site_id.value
+		if tracker_url != null and site_id != null then
+			append("<!-- Piwik -->")
+			append("<script type=\"text/javascript\">")
+			append("  var _paq = _paq || [];")
+			append("  _paq.push([\"trackPageView\"]);")
+			append("  _paq.push([\"enableLinkTracking\"]);")
+			append("  (function() \{")
+			append("    var u=((\"https:\" == document.location.protocol) ? \"https\" : \"http\") + \"://{tracker_url}\";")
+			append("    _paq.push([\"setTrackerUrl\", u+\"piwik.php\"]);")
+			append("    _paq.push([\"setSiteId\", \"{site_id}\"]);")
+			append("    var d=document, g=d.createElement(\"script\"), s=d.getElementsByTagName(\"script\")[0]; g.type=\"text/javascript\";")
+			append("    g.defer=true; g.async=true; g.src=u+\"piwik.js\"; s.parentNode.insertBefore(g,s);")
+			append("  \})();")
+			append(" </script>")
+			append("<!-- End Piwik Code -->")
+		end
 		append("</body>")
 	end
 
@@ -346,10 +367,9 @@ class NitdocOverview
 	private var mbuilder: ModelBuilder
 	private var mmodules = new Array[MModule]
 
-	init(ctx: NitdocContext, dot_dir: nullable String) do
+	init(ctx: NitdocContext) do
 		super(ctx)
 		self.mbuilder = ctx.mbuilder
-		self.dot_dir = dot_dir
 		# get modules
 		var mmodules = new HashSet[MModule]
 		for mmodule in mbuilder.model.mmodule_importation_hierarchy do
@@ -439,7 +459,6 @@ class NitdocSearch
 
 	init(ctx: NitdocContext) do
 		super(ctx)
-		self.dot_dir = null
 	end
 
 	redef fun title do return "Search"
@@ -528,11 +547,10 @@ class NitdocModule
 	private var intro_mclasses = new HashSet[MClass]
 	private var redef_mclasses = new HashSet[MClass]
 
-	init(mmodule: MModule, ctx: NitdocContext, dot_dir: nullable String) do
+	init(mmodule: MModule, ctx: NitdocContext) do
 		super(ctx)
 		self.mmodule = mmodule
 		self.mbuilder = ctx.mbuilder
-		self.dot_dir = dot_dir
 		# get local mclasses
 		for m in mmodule.in_nesting.greaters do
 			for mclassdef in m.mclassdefs do
@@ -721,11 +739,9 @@ class NitdocClass
 	private var meths = new HashSet[MMethodDef]
 	private var inherited = new HashSet[MPropDef]
 
-	init(mclass: MClass, ctx: NitdocContext, dot_dir: nullable String, source: nullable String) do
+	init(mclass: MClass, ctx: NitdocContext) do
 		super(ctx)
 		self.mclass = mclass
-		self.dot_dir = dot_dir
-		self.source = source
 		# load properties
 		var locals = new HashSet[MProperty]
 		for mclassdef in mclass.mclassdefs do
@@ -1803,11 +1819,13 @@ redef class AModule
 		return ""
 	end
 
+	# The doc location or the first line of the block if doc node is null
 	private fun doc_location: Location do
 		if n_moduledecl != null and n_moduledecl.n_doc != null then
 			return n_moduledecl.n_doc.location
 		end
-		return location
+		var l = location
+		return new Location(l.file, l.line_start, l.line_start, l.column_start, l.column_start)
 	end
 end
 
@@ -1827,9 +1845,11 @@ redef class AStdClassdef
 		return ""
 	end
 
+	# The doc location or the first line of the block if doc node is null
 	private fun doc_location: Location do
 		if n_doc != null then return n_doc.location
-		return location
+		var l = location
+		return new Location(l.file, l.line_start, l.line_start, l.column_start, l.column_start)
 	end
 end
 
@@ -1851,7 +1871,9 @@ redef class APropdef
 
 	private fun doc_location: Location do
 		if n_doc != null then return n_doc.location
-		return location
+		var l = location
+		return new Location(l.file, l.line_start, l.line_start, l.column_start, l.column_start)
+
 	end
 end
 

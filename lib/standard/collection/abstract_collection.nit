@@ -113,7 +113,7 @@ interface Collection[E]
 		return nb
 	end
 
-	# Return one the item of the collection
+	# Return the first item of the collection
 	#
 	#    assert [1,2,3].first                == 1
 	fun first: E
@@ -151,6 +151,7 @@ interface Iterator[E]
 end
 
 # A collection that contains only one item.
+# Used to pass arguments by reference
 class Container[E]
 	super Collection[E]
 
@@ -222,7 +223,7 @@ end
 
 # Abstract sets.
 #
-# Set contains contains only one element with the same value (according to ==).
+# Set is a collection without ducplicates (according to ==)
 #      var s: Set[String] = new ArraySet[String]
 #      var a = "Hello"
 #      var b = "Hel" + "lo"
@@ -279,6 +280,20 @@ interface MapRead[K: Object, E]
 	# Get the item at `key`.
 	fun [](key: K): E is abstract
 
+	# Get the item at `key` or null if `key` is not in the map.
+	#
+	#     var x = new HashMap[String, Int]
+	#     x["four"] = 4
+	#     assert x.get_or_null("four") == 4
+	#     assert x.get_or_null("five") == null
+	#
+	# Note: use `has_key` and `[]` if you need the distinction bewteen a key associated with null, and no key.
+	fun get_or_null(key: K): nullable E
+	do
+		if has_key(key) then return self[key]
+		return null
+	end
+
 	# Get the item at `key` or return `default` if not in map
 	fun get_or_default(key: K, default: E): E
 	do
@@ -307,6 +322,13 @@ interface MapRead[K: Object, E]
 
 	# Number of items in the collection.
 	fun length: Int is abstract
+
+	# Called by the underling implementation of `[]` to provide a default value when a `key` has no value
+	# By default the behavior is to abort.
+	#
+	# Note: the value is returned *as is*, implementations may want to store the value in the map before returning it
+	# @toimplement
+	protected fun provide_default_value(key: K): E do abort
 end
 
 # Maps are associative collections: `key` -> `item`.
@@ -530,7 +552,7 @@ interface CoupleMap[K: Object, E]
 	do
 		var c = couple_at(key)
 		if c == null then
-			abort
+			return provide_default_value(key)
 		else
 			return c.second
 		end
