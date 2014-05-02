@@ -539,15 +539,13 @@ abstract class AbstractCompiler
 	do
 		var v = self.new_visitor
 		v.add_decl("#include <signal.h>")
-		var ost = modelbuilder.toolcontext.opt_stacktrace.value
 
-		if ost == null then
-			var platform = mainmodule.target_platform
-			if platform != null and not platform.supports_libunwind then
+		var ost = modelbuilder.toolcontext.opt_stacktrace.value
+		var platform = mainmodule.target_platform
+		if platform != null then
+			if ost == null and not platform.supports_libunwind then
 				ost = "none"
-			else
-				ost = "nitstack"
-			end
+			else ost = "nitstack"
 			modelbuilder.toolcontext.opt_stacktrace.value = ost
 		end
 
