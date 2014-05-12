@@ -547,6 +547,8 @@ abstract class AbstractCompiler
 				ost = "none"
 			else ost = "nitstack"
 			modelbuilder.toolcontext.opt_stacktrace.value = ost
+
+			if platform.no_main then modelbuilder.toolcontext.opt_no_main.value = true
 		end
 
 		if ost == "nitstack" or ost == "libunwind" then
