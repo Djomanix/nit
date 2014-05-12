@@ -21,11 +21,23 @@ import string_search
 import time
 
 in "C Header" `{
+	#include <stdlib.h>
+	#include <stdio.h>
 	#include <dirent.h>
 	#include <string.h>
 	#include <sys/types.h>
 	#include <sys/stat.h>
 	#include <unistd.h>
+`}
+
+in "C" `{
+	#include <poll.h>
+
+	void *to_nit_file_stat(struct stat* st){
+		struct stat* stat_element;
+		stat_element = malloc(sizeof(struct stat));
+		return memcpy(stat_element, st, sizeof(struct stat));
+	}
 `}
 
 redef class Object
@@ -186,7 +198,15 @@ class Stdin
 
 	# Is these something to read? (non blocking)
 	# FIXME: should be generalized
-	fun poll_in: Bool is extern "file_stdin_poll_in"
+	fun poll_in: Bool `{
+		struct pollfd fd = {0, POLLIN, 0};
+		int res = poll(&fd, 1, 0);
+		if (res == -1) {
+			perror("Error poll stdin");
+			exit(EXIT_FAILURE);
+		}
+		return res > 0;
+	`}
 end
 
 class Stdout
@@ -465,8 +485,21 @@ redef class String
 end
 
 redef class NativeString
-	private fun file_exists: Bool is extern "string_NativeString_NativeString_file_exists_0"
-	private fun file_stat: FileStat is extern "string_NativeString_NativeString_file_stat_0"
+	private fun file_exists: Bool `{
+		FILE *hdl = fopen(recv,"r");
+		if(hdl != NULL){
+			fclose(hdl);
+		}
+		return hdl != NULL;
+	`}
+
+	private fun file_stat: FileStat `{
+		struct stat buff;
+		if(stat(recv, &buff) != -1)
+			return to_nit_file_stat(&buff);
+		return 0;
+	`}
+
 	private fun file_lstat: FileStat `{
 		struct stat* stat_element;
 		int res;
@@ -475,8 +508,9 @@ redef class NativeString
 		if (res == -1) return NULL;
 		return stat_element;
 	`}
+
 	private fun file_mkdir: Bool is extern "string_NativeString_NativeString_file_mkdir_0"
-	private fun file_delete: Bool is extern "string_NativeString_NativeString_file_delete_0"
+	private fun file_delete: Bool `{ return remove(recv) == 0; `}
 	private fun file_chdir is extern "string_NativeString_NativeString_file_chdir_0"
 	private fun file_realpath: NativeString is extern "file_NativeString_realpath"
 end
@@ -515,7 +549,12 @@ private extern class NativeFile `{ FILE* `}
 	fun io_read(buf: NativeString, len: Int): Int is extern "file_NativeFile_NativeFile_io_read_2"
 	fun io_write(buf: NativeString, len: Int): Int is extern "file_NativeFile_NativeFile_io_write_2"
 	fun io_close: Int is extern "file_NativeFile_NativeFile_io_close_0"
-	fun file_stat: FileStat is extern "file_NativeFile_NativeFile_file_stat_0"
+	fun file_stat: FileStat `{
+		struct stat buff;
+		if(fstat(fileno(recv), &buff) != -1)
+			return to_nit_file_stat(&buff);
+		return 0;
+	`}
 
 	new io_open_read(path: NativeString) is extern "file_NativeFileCapable_NativeFileCapable_io_open_read_1"
 	new io_open_write(path: NativeString) is extern "file_NativeFileCapable_NativeFileCapable_io_open_write_1"
