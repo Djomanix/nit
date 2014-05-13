@@ -1,7 +1,5 @@
 # This file is part of NIT ( http://www.nitlanguage.org ).
 #
-# Copyright 2013 Lucas Bajolet <lucas.bajolet@hotmail.com>
-#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,25 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Network debugger for a nit program (server part)
-module nitdbg_server
+# General module for tree data structures
+module trees
 
-import network_debugger
-import debugger_commons
-
-redef class InterpretCommons
-
-	redef fun launch
-	do
-		super
-		if toolcontext.opt_debug_port.value < 0 or toolcontext.opt_debug_port.value > 65535 then
-			toolcontext.option_context.usage
-			return
-		end
-
-		modelbuilder.run_debugger_network_mode(mainmodule.as(not null),arguments.as(not null),toolcontext.opt_debug_port.value)
-	end
-
-end
-
-(new InterpretCommons).launch
+import abstract_tree
+import bintree
+import rbtree
