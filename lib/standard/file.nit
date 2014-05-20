@@ -201,7 +201,7 @@ class Stdin
 
 	# Is these something to read? (non blocking)
 	# FIXME: should be generalized
-	fun poll_in: Bool `{
+	redef fun poll_in: Bool `{
 		struct pollfd fd = {0, POLLIN, 0};
 		int res = poll(&fd, 1, 0);
 		if (res == -1) {
