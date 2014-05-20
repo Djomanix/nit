@@ -77,7 +77,7 @@ THIS_MAKEFILE := $(abspath $(lastword $(MAKEFILE_LIST)))
 NACL_SDK_ROOT ?= $(abspath $(dir $(THIS_MAKEFILE))../../../..)
 
 # Project Build flags
-WARNINGS := -Wall -pedantic -Werror -Wno-long-long -Wno-unused-value -Wno-unused-label -Wno-duplicate-decl-specifier -Wno-switch -Wno-embedded-directive
+WARNINGS := -Wall -pedantic -Wno-long-long -Wno-unused-value -Wno-unused-label -Wno-duplicate-decl-specifier -Wno-switch -Wno-embedded-directive #-Werror
 CXXFLAGS := -pthread $(WARNINGS)
 
 CXXFLAGS += -g -O0 # Debug
@@ -93,8 +93,8 @@ OSNAME := $(shell $(GETOS))
 PNACL_TC_PATH := $(abspath $(NACL_SDK_ROOT)/toolchain/$(OSNAME)_pnacl)
 PNACL_CXX := $(PNACL_TC_PATH)/bin/pnacl-clang
 PNACL_FINALIZE := $(PNACL_TC_PATH)/bin/pnacl-finalize
-CXXFLAGS += -I$(NACL_SDK_ROOT)/include
-LDFLAGS := -L$(NACL_SDK_ROOT)/lib/pnacl/Release -lppapi_cpp -lppapi
+CXXFLAGS += -I$(NACL_SDK_ROOT)/include -I$(NACL_SDK_ROOT)/include/pnacl
+LDFLAGS := -L$(NACL_SDK_ROOT)/lib/pnacl/Release -lppapi_cpp -lppapi -lm
 
 #
 # Disable DOS PATH warning when using Cygwin based tools Windows
@@ -244,6 +244,6 @@ function updateStatus(opt_message) {
 	redef fun compile_c_code(compiler, compile_dir)
 	do
 		# Generate the pexe
-		toolcontext.exec_and_check(["make", "-C", compile_dir], "PNaCl project error")
+		toolcontext.exec_and_check(["make", "-C", compile_dir, "-j", "4"], "PNaCl project error")
 	end
 end
